@@ -254,6 +254,4 @@ def test_context_sections_preserve_reserved_index_names(tmp_path):
 
         assert len(targets) == 1
         assert _portable_filename_key(targets[0]) != _portable_filename_key("index.md")
-        assert (session_dir / targets[0]).read_text(encoding="utf-8") == (
-            "context payload"
-        )
+        assert (session_dir / targets[0]).read_text(encoding="utf-8") == "context payload"
