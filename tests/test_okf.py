@@ -8,6 +8,9 @@ foreign OKF bundle whose free-form ``type`` and unknown keys must land in the
 ``[Supporting data]`` footer without loss.
 """
 
+import re
+import unicodedata
+
 from memanto.app.services.okf_export_service import OkfExportService
 from memanto.cli.migrate.mappers import map_okf
 from memanto.cli.migrate.okf_loader import load_okf_bundle
@@ -186,3 +189,71 @@ def test_loader_splits_stacked_file(tmp_path):
     assert {m["title"] for m in export["memories"]} == {
         f"Standup {i}" for i in range(5)
     }
+
+def _context_index_targets(index_path):
+    return re.findall(r"\]\(([^)]+)\)", index_path.read_text(encoding="utf-8"))
+
+
+def _portable_filename_key(name):
+    return unicodedata.normalize("NFC", name).casefold()
+
+
+def test_context_sections_preserve_portable_filename_collisions(tmp_path):
+    cases = [
+        ("session.md", "session.md"),
+        ("Session.md", "session.md"),
+        ("é.md", "é.md"),
+    ]
+
+    for case_index, (first_name, second_name) in enumerate(cases):
+        case_root = tmp_path / f"collision-{case_index}"
+        first_dir = case_root / "first"
+        second_dir = case_root / "second"
+        first_dir.mkdir(parents=True)
+        second_dir.mkdir(parents=True)
+        first_source = first_dir / first_name
+        second_source = second_dir / second_name
+        first_source.write_text("first", encoding="utf-8")
+        second_source.write_text("second", encoding="utf-8")
+
+        svc = OkfExportService(exports_dir=case_root / "exports")
+        svc.write_okf_bundle(
+            f"agent{case_index}",
+            {},
+            sessions=[first_source, second_source],
+        )
+
+        session_dir = svc.exports_dir / f"agent{case_index}_okf" / "sessions"
+        targets = _context_index_targets(session_dir / "index.md")
+
+        assert len(targets) == 2
+        assert len({_portable_filename_key(target) for target in targets}) == 2
+        assert all((session_dir / target).is_file() for target in targets)
+        assert {
+            (session_dir / target).read_text(encoding="utf-8")
+            for target in targets
+        } == {"first", "second"}
+
+
+def test_context_sections_preserve_reserved_index_names(tmp_path):
+    for case_index, reserved_name in enumerate(("index.md", "INDEX.MD")):
+        case_root = tmp_path / f"reserved-{case_index}"
+        case_root.mkdir()
+        source = case_root / reserved_name
+        source.write_text("context payload", encoding="utf-8")
+
+        svc = OkfExportService(exports_dir=case_root / "exports")
+        svc.write_okf_bundle(
+            f"agentr{case_index}",
+            {},
+            sessions=[source],
+        )
+
+        session_dir = svc.exports_dir / f"agentr{case_index}_okf" / "sessions"
+        targets = _context_index_targets(session_dir / "index.md")
+
+        assert len(targets) == 1
+        assert _portable_filename_key(targets[0]) != _portable_filename_key("index.md")
+        assert (session_dir / targets[0]).read_text(encoding="utf-8") == (
+            "context payload"
+        )

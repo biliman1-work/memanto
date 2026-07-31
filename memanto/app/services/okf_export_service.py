@@ -23,7 +23,8 @@ frontmatter keys.
 
 import re
 import shutil
-from datetime import datetime
+import unicodedata
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -204,17 +205,36 @@ class OkfExportService:
 
         These are export-only context — the loader ignores everything outside
         ``memories/`` — so they are copied as-is rather than re-wrapped as OKF
-        nodes.
+        nodes. Destination names are planned before copying and remain distinct
+        after NFC normalization plus case folding, so the bundle is portable to
+        case-insensitive filesystems.
         """
         existing = sorted(f for f in files if f.exists())
         if not existing:
             return 0
 
+        def canonical_name(name: str) -> str:
+            return unicodedata.normalize("NFC", name).casefold()
+
+        # index.md belongs to the generated section index. Plan every payload
+        # name first so no copy can overwrite another payload or the index,
+        # including on case-insensitive / normalization-aware filesystems.
+        used_names = {canonical_name("index.md")}
+        planned: list[tuple[Path, str]] = []
+        for src in existing:
+            destination_name = src.name
+            suffix_number = 2
+            while canonical_name(destination_name) in used_names:
+                destination_name = f"{src.stem}-{suffix_number}{src.suffix}"
+                suffix_number += 1
+            used_names.add(canonical_name(destination_name))
+            planned.append((src, destination_name))
+
         section_dir.mkdir(parents=True, exist_ok=True)
         links: list[tuple[str, str]] = []
-        for src in existing:
-            shutil.copy2(str(src), str(section_dir / src.name))
-            links.append((src.name, src.name))
+        for src, destination_name in planned:
+            shutil.copy2(str(src), str(section_dir / destination_name))
+            links.append((destination_name, destination_name))
 
         self._write_index(section_dir, title, f"{title} ({len(links)})", links)
         return len(links)
@@ -257,19 +277,24 @@ class OkfExportService:
 
     @staticmethod
     def _parse_ts(value: Any) -> datetime:
-        """Best-effort parse of a stored ``created_at`` into a datetime; falls
-        back to now so the activity timeline always has an hour bucket."""
+        """Best-effort parse of a stored ``created_at`` into an aware UTC datetime;
+        falls back to now so the activity timeline always has an hour bucket."""
         if isinstance(value, datetime):
-            return value
+            if value.tzinfo is None or value.utcoffset() is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc)
         if isinstance(value, str) and value.strip():
             text = value.strip()
             if text.endswith("Z"):
                 text = text[:-1] + "+00:00"
             try:
-                return datetime.fromisoformat(text)
+                dt = datetime.fromisoformat(text)
+                if dt.tzinfo is None or dt.utcoffset() is None:
+                    return dt.replace(tzinfo=timezone.utc)
+                return dt.astimezone(timezone.utc)
             except ValueError:
                 pass
-        return datetime.now()
+        return datetime.now(timezone.utc)
 
     # Rendering helpers
     def _render_okf_doc(self, mem: dict[str, Any], mem_type: str) -> str:
