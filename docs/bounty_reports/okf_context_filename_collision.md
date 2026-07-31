@@ -27,7 +27,7 @@ self._write_index(
 )
 ```
 
-The destination name is derived only from `src.name`. No preflight step detects duplicate, case-folded, or reserved destination names.
+The destination name is derived only from `src.name`. No preflight step detects duplicate, case-folded, Unicode-normalized, or reserved destination names.
 
 ## Reproduction 1: duplicate basenames
 
@@ -102,6 +102,7 @@ Every existing input supplied to `summaries` or `sessions` should be preserved, 
 
 ```python
 import re
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -113,11 +114,16 @@ def _index_targets(index_path: Path) -> list[str]:
     return re.findall(r"\]\(([^)]+)\)", index_path.read_text(encoding="utf-8"))
 
 
+def _canonical_name(name: str) -> str:
+    return unicodedata.normalize("NFC", name).casefold()
+
+
 @pytest.mark.parametrize(
     ("first_name", "second_name"),
     [
         ("session.md", "session.md"),
         ("Session.md", "session.md"),
+        ("é.md", "é.md"),
     ],
 )
 def test_okf_export_preserves_colliding_context_filenames(
@@ -143,7 +149,7 @@ def test_okf_export_preserves_colliding_context_filenames(
     targets = _index_targets(session_dir / "index.md")
 
     assert len(targets) == 2
-    assert len({target.casefold() for target in targets}) == 2
+    assert len({_canonical_name(target) for target in targets}) == 2
     assert all((session_dir / target).is_file() for target in targets)
     assert {
         (session_dir / target).read_text(encoding="utf-8")
@@ -151,8 +157,9 @@ def test_okf_export_preserves_colliding_context_filenames(
     } == {"first", "second"}
 
 
-def test_okf_export_preserves_context_named_index_md(tmp_path):
-    source = tmp_path / "index.md"
+@pytest.mark.parametrize("reserved_name", ["index.md", "INDEX.MD"])
+def test_okf_export_preserves_reserved_context_name(tmp_path, reserved_name):
+    source = tmp_path / reserved_name
     source.write_text("context payload", encoding="utf-8")
 
     service = OkfExportService(exports_dir=tmp_path / "exports")
@@ -166,13 +173,13 @@ def test_okf_export_preserves_context_named_index_md(tmp_path):
     targets = _index_targets(session_dir / "index.md")
 
     assert len(targets) == 1
-    assert targets[0].casefold() != "index.md"
+    assert _canonical_name(targets[0]) != _canonical_name("index.md")
     assert (session_dir / targets[0]).read_text(encoding="utf-8") == (
         "context payload"
     )
 ```
 
-The parametrized test covers both ordinary duplicate basenames and case-only variants such as `Session.md` and `session.md`. It verifies that both final index targets remain distinct under case folding, both files exist, and both payloads survive. The reserved-name test covers the generated `index.md` collision. All three cases fail against the current implementation.
+The first parametrized test covers ordinary duplicate basenames, case-only variants such as `Session.md` and `session.md`, and canonically equivalent composed/decomposed Unicode names. It verifies that final index targets remain distinct after NFC normalization plus case folding, both files exist, and both payloads survive. The second test covers lowercase and uppercase variants of the reserved `index.md` name. Every parametrized case fails against the current implementation.
 
 ## Suggested fix
 
@@ -187,6 +194,6 @@ A short hash alone is not a uniqueness guarantee; the final membership check is 
 
 ## Impact
 
-This is a silent data-integrity failure in an export path. A bundle whose indexes advertise multiple context documents can omit documents without warning, and a single valid `index.md` input is always lost. Consumers may reason over incomplete context while the export appears successful.
+This is a silent data-integrity failure in an export path. A bundle whose indexes advertise multiple context documents can omit documents without warning, and a valid `index.md`-equivalent input can be lost. Consumers may reason over incomplete context while the export appears successful.
 
 Bounty: #770
