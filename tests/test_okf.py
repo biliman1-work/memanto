@@ -190,6 +190,7 @@ def test_loader_splits_stacked_file(tmp_path):
         f"Standup {i}" for i in range(5)
     }
 
+
 def _context_index_targets(index_path):
     return re.findall(r"\]\(([^)]+)\)", index_path.read_text(encoding="utf-8"))
 
@@ -230,8 +231,7 @@ def test_context_sections_preserve_portable_filename_collisions(tmp_path):
         assert len({_portable_filename_key(target) for target in targets}) == 2
         assert all((session_dir / target).is_file() for target in targets)
         assert {
-            (session_dir / target).read_text(encoding="utf-8")
-            for target in targets
+            (session_dir / target).read_text(encoding="utf-8") for target in targets
         } == {"first", "second"}
 
 
@@ -254,4 +254,6 @@ def test_context_sections_preserve_reserved_index_names(tmp_path):
 
         assert len(targets) == 1
         assert _portable_filename_key(targets[0]) != _portable_filename_key("index.md")
-        assert (session_dir / targets[0]).read_text(encoding="utf-8") == "context payload"
+        assert (session_dir / targets[0]).read_text(
+            encoding="utf-8"
+        ) == "context payload"
