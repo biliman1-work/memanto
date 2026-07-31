@@ -2,7 +2,7 @@
 
 ## Summary
 
-`OkfExportService._write_docs_section()` copies each source file to `section_dir / src.name`. Different source paths can therefore resolve to the same destination. The later copy silently replaces the earlier one, while the exporter still reports both inputs as exported and writes duplicate index links.
+`OkfExportService._write_docs_section()` copies each source file to `section_dir / src.name`. Different source paths can therefore resolve to the same destination. The later copy silently replaces the earlier one, while the generated indexes still present every input as if it had been preserved.
 
 There is a second collision with the section's reserved `index.md`: a source context file with that basename is copied first and then overwritten by the generated section index.
 
@@ -19,7 +19,12 @@ for src in existing:
     shutil.copy2(str(src), str(section_dir / src.name))
     links.append((src.name, src.name))
 
-self._write_index(section_dir / "index.md", title, links)
+self._write_index(
+    section_dir,
+    title,
+    f"{title} ({len(links)})",
+    links,
+)
 ~~~
 
 The destination name is derived only from `src.name`. No preflight step detects duplicate, case-folded, or reserved destination names.
@@ -46,10 +51,12 @@ result = service.write_okf_bundle(
     sessions=[first / "session.md", second / "session.md"],
 )
 
-session_dir = Path(result["output_path"]) / "sessions"
+bundle = Path(result["output_path"])
+session_dir = bundle / "sessions"
 payloads = [p for p in session_dir.glob("*.md") if p.name != "index.md"]
 
-print(result["sections"]["sessions"])
+print(result["sections"])
+print((bundle / "index.md").read_text(encoding="utf-8"))
 print([p.name for p in payloads])
 print([p.read_text(encoding="utf-8") for p in payloads])
 print((session_dir / "index.md").read_text(encoding="utf-8"))
@@ -57,7 +64,8 @@ print((session_dir / "index.md").read_text(encoding="utf-8"))
 
 ### Actual result
 
-- `result["sections"]["sessions"]` says `"2 session log file(s)"`.
+- `result["sections"]` contains `"sessions"`.
+- The root index says `2 session log file(s)`, and the section index heading says `Sessions (2)`.
 - Only one payload, `sessions/session.md`, remains.
 - Its content is whichever source was copied last.
 - `sessions/index.md` contains two entries that both target `session.md`.
@@ -76,14 +84,17 @@ result = service.write_okf_bundle(
     sessions=[source],
 )
 
-session_dir = Path(result["output_path"]) / "sessions"
-print(result["sections"]["sessions"])
+bundle = Path(result["output_path"])
+session_dir = bundle / "sessions"
+
+print(result["sections"])
+print((bundle / "index.md").read_text(encoding="utf-8"))
 print((session_dir / "index.md").read_text(encoding="utf-8"))
 ~~~
 
 ### Actual result
 
-The result says one session log was exported, but the copied payload is replaced by the generated section index. The index then links `index.md` to itself. No exported file contains `context payload`.
+The returned sections and root index indicate that a session section with one log was exported, but the copied payload is replaced by the generated section index. That index links `index.md` to itself. No exported file contains `context payload`.
 
 ## Expected result
 
@@ -150,7 +161,7 @@ def test_okf_export_preserves_context_named_index_md(tmp_path):
     )
 ~~~
 
-Both tests fail against the current implementation. The first detects the overwritten duplicate and the duplicate index targets; the second detects collision with the generated index itself.
+Both tests fail against the current implementation. The first detects the overwritten duplicate and duplicate index targets; the second detects collision with the generated index itself.
 
 The `casefold()` assertion defines a portable export contract: generated payload names remain distinct when the bundle is moved from a case-sensitive filesystem to a case-insensitive one.
 
@@ -160,13 +171,13 @@ Perform a preflight mapping from every source path to a final destination name b
 
 1. Reserve `index.md` and every already-assigned destination using a documented Unicode-normalization and case-folding policy.
 2. Start with `src.name`. On collision, add a deterministic suffix derived from the normalized source path.
-3. Check the complete candidate again. If it still collides (including a hash or normalization collision), deterministically extend/disambiguate it or fail before any copy.
+3. Check the complete candidate again. If it still collides (including a hash or normalization collision), deterministically extend or disambiguate it, or fail before any copy.
 4. Copy using only the finalized names and build index links from the same mapping.
 
 A short hash alone is not a uniqueness guarantee; the final membership check is required.
 
 ## Impact
 
-This is a silent data-integrity failure in an export path. A bundle advertised as containing multiple context documents can omit documents without warning, and a single valid `index.md` input is always lost. Consumers may reason over incomplete context while the export metadata incorrectly reports success.
+This is a silent data-integrity failure in an export path. A bundle whose indexes advertise multiple context documents can omit documents without warning, and a single valid `index.md` input is always lost. Consumers may reason over incomplete context while the export appears successful.
 
 Bounty: #770
