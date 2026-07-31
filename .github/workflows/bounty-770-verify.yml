@@ -1,0 +1,45 @@
+name: Bounty 770 verification
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "memanto/app/services/okf_export_service.py"
+      - "tests/test_okf.py"
+      - ".github/workflows/bounty-770-verify.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-targets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --all-extras --dev
+      - run: uv run ruff check memanto/app/services/okf_export_service.py tests/test_okf.py
+      - run: uv run ruff format --check memanto/app/services/okf_export_service.py tests/test_okf.py
+
+  test-okf:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.14", "3.13", "3.12", "3.11", "3.10"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "${{ matrix.python-version }}"
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --all-extras --dev
+      - run: echo '__version__ = "0.0.0.dev0"' > memanto/app/_version.py
+      - name: Run OKF tests
+        env:
+          MOORCHEH_API_KEY: test-api-key
+        run: uv run pytest tests/test_okf.py -v --tb=short
