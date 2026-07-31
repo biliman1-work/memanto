@@ -401,4 +401,4 @@ class OkfExportService:
         else:
             lines.append("> Empty bundle — no memories found.")
         lines.append("")
-        (base / "index.md").write_text("\n".join(lines), encoding="utf
+        (base / "index.md").write_text("\n".join(lines), encoding="utf-8")
