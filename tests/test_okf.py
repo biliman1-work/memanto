@@ -257,3 +257,4 @@ def test_context_sections_preserve_reserved_index_names(tmp_path):
         assert (session_dir / targets[0]).read_text(encoding="utf-8") == (
             "context payload"
         )
+
