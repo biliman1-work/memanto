@@ -12,7 +12,7 @@ Both cases affect the `summaries` and `sessions` inputs accepted by `write_okf_b
 
 `memanto/app/services/okf_export_service.py`, in `_write_docs_section()`:
 
-~~~python
+```python
 existing = sorted(f for f in files if f.exists())
 
 for src in existing:
@@ -25,13 +25,13 @@ self._write_index(
     f"{title} ({len(links)})",
     links,
 )
-~~~
+```
 
 The destination name is derived only from `src.name`. No preflight step detects duplicate, case-folded, or reserved destination names.
 
 ## Reproduction 1: duplicate basenames
 
-~~~python
+```python
 from pathlib import Path
 from memanto.app.services.okf_export_service import OkfExportService
 
@@ -40,7 +40,6 @@ first = root / "agent-a"
 second = root / "agent-b"
 first.mkdir(parents=True, exist_ok=True)
 second.mkdir(parents=True, exist_ok=True)
-
 (first / "session.md").write_text("content from A", encoding="utf-8")
 (second / "session.md").write_text("content from B", encoding="utf-8")
 
@@ -60,7 +59,7 @@ print((bundle / "index.md").read_text(encoding="utf-8"))
 print([p.name for p in payloads])
 print([p.read_text(encoding="utf-8") for p in payloads])
 print((session_dir / "index.md").read_text(encoding="utf-8"))
-~~~
+```
 
 ### Actual result
 
@@ -74,7 +73,7 @@ The export completes successfully, so callers have no indication that one input 
 
 ## Reproduction 2: reserved index filename
 
-~~~python
+```python
 source = root / "index.md"
 source.write_text("context payload", encoding="utf-8")
 
@@ -86,11 +85,10 @@ result = service.write_okf_bundle(
 
 bundle = Path(result["output_path"])
 session_dir = bundle / "sessions"
-
 print(result["sections"])
 print((bundle / "index.md").read_text(encoding="utf-8"))
 print((session_dir / "index.md").read_text(encoding="utf-8"))
-~~~
+```
 
 ### Actual result
 
@@ -102,9 +100,11 @@ Every existing input supplied to `summaries` or `sessions` should be preserved, 
 
 ## Suggested regression tests
 
-~~~python
+```python
 import re
 from pathlib import Path
+
+import pytest
 
 from memanto.app.services.okf_export_service import OkfExportService
 
@@ -113,19 +113,30 @@ def _index_targets(index_path: Path) -> list[str]:
     return re.findall(r"\]\(([^)]+)\)", index_path.read_text(encoding="utf-8"))
 
 
-def test_okf_export_preserves_context_files_with_same_basename(tmp_path):
+@pytest.mark.parametrize(
+    ("first_name", "second_name"),
+    [
+        ("session.md", "session.md"),
+        ("Session.md", "session.md"),
+    ],
+)
+def test_okf_export_preserves_colliding_context_filenames(
+    tmp_path, first_name, second_name
+):
     first = tmp_path / "first"
     second = tmp_path / "second"
     first.mkdir()
     second.mkdir()
-    (first / "session.md").write_text("first", encoding="utf-8")
-    (second / "session.md").write_text("second", encoding="utf-8")
+    first_source = first / first_name
+    second_source = second / second_name
+    first_source.write_text("first", encoding="utf-8")
+    second_source.write_text("second", encoding="utf-8")
 
     service = OkfExportService(exports_dir=tmp_path / "exports")
     result = service.write_okf_bundle(
         "agent",
         {},
-        sessions=[first / "session.md", second / "session.md"],
+        sessions=[first_source, second_source],
     )
 
     session_dir = Path(result["output_path"]) / "sessions"
@@ -159,11 +170,9 @@ def test_okf_export_preserves_context_named_index_md(tmp_path):
     assert (session_dir / targets[0]).read_text(encoding="utf-8") == (
         "context payload"
     )
-~~~
+```
 
-Both tests fail against the current implementation. The first detects the overwritten duplicate and duplicate index targets; the second detects collision with the generated index itself.
-
-The `casefold()` assertion defines a portable export contract: generated payload names remain distinct when the bundle is moved from a case-sensitive filesystem to a case-insensitive one.
+The parametrized test covers both ordinary duplicate basenames and case-only variants such as `Session.md` and `session.md`. It verifies that both final index targets remain distinct under case folding, both files exist, and both payloads survive. The reserved-name test covers the generated `index.md` collision. All three cases fail against the current implementation.
 
 ## Suggested fix
 
