@@ -5,7 +5,11 @@ on:
     branches: [main]
     paths:
       - "memanto/app/services/okf_export_service.py"
+      - "memanto/cli/client/direct_client.py"
+      - "memanto/cli/client/sdk_client.py"
+      - "docs/bounty_reports/partial_export_memory_loss.md"
       - "tests/test_okf.py"
+      - "tests/test_export_resilience.py"
       - ".github/workflows/bounty-770-verify.yml"
   workflow_dispatch:
 
@@ -22,8 +26,22 @@ jobs:
           python-version: "3.10"
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --all-extras --dev
-      - run: uv run ruff check memanto/app/services/okf_export_service.py tests/test_okf.py
-      - run: uv run ruff format --check memanto/app/services/okf_export_service.py tests/test_okf.py
+      - name: Lint bounty targets
+        run: >-
+          uv run ruff check
+          memanto/app/services/okf_export_service.py
+          memanto/cli/client/direct_client.py
+          memanto/cli/client/sdk_client.py
+          tests/test_okf.py
+          tests/test_export_resilience.py
+      - name: Check bounty target formatting
+        run: >-
+          uv run ruff format --check
+          memanto/app/services/okf_export_service.py
+          memanto/cli/client/direct_client.py
+          memanto/cli/client/sdk_client.py
+          tests/test_okf.py
+          tests/test_export_resilience.py
 
   test-okf:
     runs-on: ubuntu-latest
@@ -39,7 +57,11 @@ jobs:
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --all-extras --dev
       - run: echo '__version__ = "0.0.0.dev0"' > memanto/app/_version.py
-      - name: Run OKF tests
+      - name: Run bounty regression tests
         env:
           MOORCHEH_API_KEY: test-api-key
-        run: uv run pytest tests/test_okf.py -v --tb=short
+        run: >-
+          uv run pytest
+          tests/test_okf.py
+          tests/test_export_resilience.py
+          -v --tb=short
