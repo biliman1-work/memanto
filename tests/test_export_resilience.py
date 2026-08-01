@@ -1,14 +1,10 @@
-"""Regression coverage: ``export_memory_md`` must not silently write an
-empty export when every ``recall`` call fails (e.g. the on-prem backend is
-unreachable), and ``SdkClient.sync_memory_to_project`` must fall back to a
-previous good export instead of overwriting a project's ``MEMORY.md`` with
-nothing.
+"""Regression coverage: exports must not silently write an incomplete snapshot
+when one or more ``recall`` calls fail, and project sync must fall back to a
+previous good export instead of overwriting the project's context.
 
-Before this fix, a total-outage export produced an all-empty
-``memories_by_type`` (each per-type ``recall`` exception was swallowed) and
-still wrote it out — every call to ``memanto memory sync`` during a brief
-backend outage silently wiped the agent's exported context and the
-project's ``MEMORY.md``.
+Before this fix, a partial outage was indistinguishable from a genuinely empty
+memory category. The exporter swallowed the per-type exception, substituted an
+empty list, and replaced the good snapshot without warning.
 """
 
 from unittest.mock import MagicMock
@@ -41,7 +37,7 @@ def _build_client(client_cls, monkeypatch, tmp_path):
     return client
 
 
-class TestExportMemoryMdRefusesEmptyOnTotalFailure:
+class TestExportRefusesIncompleteRecall:
     @pytest.mark.parametrize("client_cls", [SdkClient, DirectClient])
     def test_raises_when_every_recall_fails(self, client_cls, monkeypatch, tmp_path):
         client = _build_client(client_cls, monkeypatch, tmp_path)
@@ -53,9 +49,10 @@ class TestExportMemoryMdRefusesEmptyOnTotalFailure:
             client.export_memory_md(agent_id="test-agent")
 
     @pytest.mark.parametrize("client_cls", [SdkClient, DirectClient])
-    def test_partial_failure_still_exports(self, client_cls, monkeypatch, tmp_path):
-        """One type erroring while others succeed must not raise — only a
-        *total* outage (every type failing) should refuse to write."""
+    def test_partial_failure_refuses_incomplete_export(
+        self, client_cls, monkeypatch, tmp_path
+    ):
+        """One failed type must not be represented as a genuinely empty type."""
         client = _build_client(client_cls, monkeypatch, tmp_path)
 
         def fake_recall(agent_id, query, limit, type):
@@ -65,8 +62,11 @@ class TestExportMemoryMdRefusesEmptyOnTotalFailure:
 
         monkeypatch.setattr(client, "recall", MagicMock(side_effect=fake_recall))
 
-        result = client.export_memory_md(agent_id="test-agent")
-        assert result["total_memories"] > 0
+        with pytest.raises(
+            ConnectionError,
+            match=f"incomplete.*{MEMORY_TYPE_ORDER[0]}|{MEMORY_TYPE_ORDER[0]}.*incomplete",
+        ):
+            client.export_memory_md(agent_id="test-agent")
 
 
 class TestSyncUsesCacheFastPath:
@@ -104,6 +104,48 @@ class TestSyncUsesCacheFastPath:
             client.sync_memory_to_project(
                 agent_id="test-agent", project_dir=str(tmp_path / "project")
             )
+
+    @pytest.mark.parametrize("client_cls", [SdkClient, DirectClient])
+    def test_okf_sync_preserves_cache_on_partial_failure(
+        self, client_cls, monkeypatch, tmp_path
+    ):
+        client = _build_client(client_cls, monkeypatch, tmp_path)
+        cache_memory = (
+            tmp_path
+            / ".memanto"
+            / "exports"
+            / "test-agent_okf"
+            / "memories"
+            / "instruction"
+            / "keep-this.md"
+        )
+        cache_memory.parent.mkdir(parents=True)
+        cache_memory.write_text(
+            "---\ntype: instruction\ntitle: Keep this\n---\n"
+            "Never silently discard this instruction.\n",
+            encoding="utf-8",
+        )
+
+        def fake_recall(agent_id, query, limit, type):
+            if type == [MEMORY_TYPE_ORDER[0]]:
+                raise ConnectionError("one category is unavailable")
+            return {"memories": [{"content": "fresh"}]}
+
+        monkeypatch.setattr(client, "recall", MagicMock(side_effect=fake_recall))
+
+        project_dir = tmp_path / "project"
+        result = client.sync_okf_to_project(
+            agent_id="test-agent", project_dir=str(project_dir)
+        )
+
+        assert result["source"] == "stale-cache"
+        assert result["total_memories"] == 1
+        synced_memory = (
+            project_dir / "okf" / "memories" / "instruction" / "keep-this.md"
+        )
+        assert synced_memory.read_text(encoding="utf-8").endswith(
+            "Never silently discard this instruction.\n"
+        )
 
     @pytest.mark.parametrize("client_cls", [SdkClient, DirectClient])
     def test_rejects_path_traversal_before_cache_lookup(
