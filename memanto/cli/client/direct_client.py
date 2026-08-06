@@ -1711,27 +1711,14 @@ class DirectClient:
         """Sync agent memories to a project directory as an OKF bundle (``<project>/okf``).
 
         Runs a fresh export into the cache, then copies the bundle into the
-        project. Falls back to the previous cached bundle when the backend is
-        unreachable (``source="stale-cache"``).
+        project.
         """
         target = Path(project_dir) / "okf"
-        cache = Path.home() / ".memanto" / "exports" / f"{agent_id}_okf"
-
-        try:
-            result = self.export_okf_bundle(
-                agent_id=agent_id, split=split, limit_per_type=limit_per_type
-            )
-            src = Path(result["output_path"])
-            total = result["total_memories"]
-            source = "fresh"
-        except ConnectionError:
-            if not cache.exists():
-                raise
-            from memanto.cli.migrate.okf_loader import load_okf_bundle
-
-            src = cache
-            total = len(load_okf_bundle(cache)["memories"])
-            source = "stale-cache"
+        result = self.export_okf_bundle(
+            agent_id=agent_id, split=split, limit_per_type=limit_per_type
+        )
+        src = Path(result["output_path"])
+        total = result["total_memories"]
 
         tmp = target.with_suffix(".okf.tmp")
         if tmp.exists():
@@ -1744,7 +1731,7 @@ class DirectClient:
         return {
             "output_path": str(target.resolve()),
             "total_memories": total,
-            "source": source,
+            "source": "fresh",
         }
 
     # Health Check
