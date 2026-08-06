@@ -1448,7 +1448,8 @@ class SdkClient:
 
         Returns:
             Dict with ``output_path``, ``total_memories``, ``source``
-            (``"cache"`` or ``"fresh"``).
+            (``"cache"``, ``"fresh"``, or ``"stale-cache"`` if a refresh
+            failed and a previous export was reused instead).
         """
         validate_safe_id(agent_id, "agent_id")
         cache_path = get_data_dir() / "exports" / f"{agent_id}_memory.md"
@@ -1466,10 +1467,24 @@ class SdkClient:
                 "source": "cache",
             }
 
-        # Run export function first (ensures ~/.memanto/exports/... is fresh)
-        export_result = self.export_memory_md(
-            agent_id=agent_id, limit_per_type=limit_per_type
-        )
+        try:
+            # Run export function first (ensures ~/.memanto/exports/... is fresh)
+            export_result = self.export_memory_md(
+                agent_id=agent_id, limit_per_type=limit_per_type
+            )
+        except ConnectionError:
+            if cache_path.exists():
+                # Backend unreachable, but we have a previously good export —
+                # serve that instead of wiping the project's MEMORY.md.
+                shutil.copy2(str(cache_path), str(target_path))
+                content = cache_path.read_text(encoding="utf-8")
+                mem_count = content.count("### ")
+                return {
+                    "output_path": str(target_path.resolve()),
+                    "total_memories": mem_count,
+                    "source": "stale-cache",
+                }
+            raise
 
         exported_path = Path(export_result["output_path"])
         if exported_path.exists():
@@ -1567,14 +1582,27 @@ class SdkClient:
         """Sync agent memories to a project directory as an OKF bundle (``<project>/okf``).
 
         Runs a fresh export into the cache, then copies the bundle into the
-        project.
+        project. Falls back to the previous cached bundle when the backend is
+        unreachable (``source="stale-cache"``).
         """
         target = Path(project_dir) / "okf"
-        result = self.export_okf_bundle(
-            agent_id=agent_id, split=split, limit_per_type=limit_per_type
-        )
-        src = Path(result["output_path"])
-        total = result["total_memories"]
+        cache = Path.home() / ".memanto" / "exports" / f"{agent_id}_okf"
+
+        try:
+            result = self.export_okf_bundle(
+                agent_id=agent_id, split=split, limit_per_type=limit_per_type
+            )
+            src = Path(result["output_path"])
+            total = result["total_memories"]
+            source = "fresh"
+        except ConnectionError:
+            if not cache.exists():
+                raise
+            from memanto.cli.migrate.okf_loader import load_okf_bundle
+
+            src = cache
+            total = len(load_okf_bundle(cache)["memories"])
+            source = "stale-cache"
 
         tmp = target.with_suffix(".okf.tmp")
         if tmp.exists():
@@ -1587,7 +1615,7 @@ class SdkClient:
         return {
             "output_path": str(target.resolve()),
             "total_memories": total,
-            "source": "fresh",
+            "source": source,
         }
 
     # Health Check
